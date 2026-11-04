@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+# importlib mode keeps pytest from needing the plugin dir (whose entry file is
+# __init__.py) to behave like a Python package during collection.
+addopts = "--import-mode=importlib"
+filterwarnings = ["ignore::DeprecationWarning"]

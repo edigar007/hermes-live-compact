@@ -1,0 +1,9 @@
+{
+  "_comment": "live_compact tuning. A context engine is constructed with no args and never receives config.yaml, so this file is the only knob surface. LC_* environment variables override it for experiment runs.",
+  "enabled": true,
+  "debug_log": false,
+  "min_total": 20000,
+  "seg_min_tokens": 600,
+  "card_ratio": 0.9,
+  "shadow_max_mb": 128
+}

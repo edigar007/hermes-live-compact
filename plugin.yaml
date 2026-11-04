@@ -1,0 +1,11 @@
+name: live_compact
+version: 0.2.0
+description: "Tail-first context compaction: cut the turn that just finished into a regex card so the prompt-cache prefix survives. Request-only projection, no history rewriting, no model calls per cut."
+author: edigar007
+license: MIT
+requires_hermes: ">=0.21.0"
+homepage: https://github.com/edigar007/hermes-live-compact
+keywords:
+  - context-engine
+  - compaction
+  - prompt-cache

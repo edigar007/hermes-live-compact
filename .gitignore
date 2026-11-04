@@ -1,0 +1,6 @@
+# runtime artefacts (never commit)
+debug.jsonl
+shadow/
+__pycache__/
+*.pyc
+.pytest_cache/

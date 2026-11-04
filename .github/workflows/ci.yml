@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # No Hermes install needed: tests/conftest.py falls back to tests/_hermes_stub when
+      # `agent` is not importable, so this suite is hermetic (no network, no secrets).
+      - name: Install pytest
+        run: python -m pip install --quiet --upgrade pytest
+
+      - name: Run tests
+        run: python -m pytest tests -q
+
+      - name: Compile check
+        run: python -m compileall -q __init__.py
