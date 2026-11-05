@@ -194,10 +194,11 @@ what the next turn needs is still raw text.
 "$HERMES_HOME/hermes-agent/venv/Scripts/python.exe" -m pytest tests -q   # Windows
 ```
 
-37 tests cover the projection contract, cache stability (deterministic cards, monotonic cut
+45 tests cover the projection contract, cache stability (deterministic cards, monotonic cut
 points, shared prefix), the watermark arithmetic, the keep window and window-relative
-sizing, exit-code anchoring, failure excerpts, raw pointers, per-session isolation, and the
-safety valves.
+sizing, exit-code anchoring, failure excerpts, raw pointers, per-session isolation, the
+safety valves, and data truth (raw files and span backups are byte-identical to what the
+card claims, and a corrupted file is repaired rather than reused).
 
 ## Credits
 

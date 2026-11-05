@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.1 — a content-addressed name was trusted without checking the content
+
+Found by a new test, not by review: both writers short-circuited on "a file with that name
+exists and is non-empty", so a truncated or corrupted file was silently reused and the card
+kept pointing at it. The name is a hash, but existence was never proof.
+
+- **`_raw_write` verifies the bytes** before reusing a `raw-<sha16>.txt`; a mismatch is
+  rewritten (and a missing `.meta.json` sidecar is re-created). Failure to verify falls
+  through to the normal write path, so a damaged raw file costs a rewrite, never a lie.
+- **`_shadow_write` verifies the bytes** against the span it is named after before reuse.
+  A truncated span backup is rewritten instead of being handed to the model as "the original".
+- **New test file `tests/test_raw_integrity.py`** (8 tests): raw file byte-identical to the
+  tool output, name hashes to its own content, every `raw-*.txt` a card names exists on
+  disk, truncated raw file repaired, backup holds the prompt not the card, no orphan
+  sidecar, idempotent rewrite, truncated span backup repaired. The previous suite only
+  asserted `meta.is_file()`, which is why this slipped through.
+
 ## 0.3.0 — port of upstream 1.0.6's four fixes
 
 Upstream (dsh-live-compact 1.0.6) fixed exactly the four things this port was weakest at.

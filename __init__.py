@@ -692,9 +692,15 @@ def _shadow_write(body_text: str, backup_id: str, session: str = "") -> bool:
     a card must never point at a backup that failed to write (upstream 1.0.5's fix)."""
     path = shadow_file(session, f"{backup_id}.txt")
     try:
-        if path.is_file() and path.stat().st_size > 0:
-            return True
         payload = body_text.encode("utf-8")
+        if path.is_file() and path.stat().st_size > 0:
+            # Reuse only when the file still IS the span it is named after; a truncated
+            # backup would otherwise be handed to the model as "the original".
+            try:
+                if path.read_bytes() == payload:
+                    return True
+            except OSError:
+                pass
         if len(payload) > _budget_left():
             return False
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -721,9 +727,19 @@ def _raw_write(text: str, *, session: str, turn: int, name: str,
     path = shadow_file(session, filename)
     meta = path.with_suffix(".meta.json")
     try:
-        if path.is_file() and path.stat().st_size > 0:
-            return filename
         payload = text.encode("utf-8")
+        full = hashlib.sha256(payload).hexdigest()
+        if path.is_file() and path.stat().st_size > 0:
+            # Content-addressed name, but "a file with that name exists" is not proof:
+            # verify the bytes, or a truncated file keeps a pointer that lies. Also repair
+            # a missing sidecar instead of leaving an unverifiable raw file behind.
+            try:
+                if hashlib.sha256(path.read_bytes()).hexdigest() == full:
+                    if not meta.is_file():
+                        _write_meta(meta, full, len(payload), turn, name, code)
+                    return filename
+            except OSError:
+                pass
         if len(payload) > _budget_left():
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -731,19 +747,25 @@ def _raw_write(text: str, *, session: str, turn: int, name: str,
         tmp.write_bytes(payload)
         os.chmod(tmp, 0o600)
         tmp.replace(path)
-        meta.write_text(json.dumps({
-            "sha256": hashlib.sha256(payload).hexdigest(),
-            "bytes": len(payload),
-            "turn": turn,
-            "name": name,
-            "exit_code": code,
-            "pid": os.getpid(),
-            "created": round(time.time(), 3),
-        }, ensure_ascii=False), encoding="utf-8")
-        os.chmod(meta, 0o600)
+        _write_meta(meta, full, len(payload), turn, name, code)
         return filename
     except Exception:
         return None
+
+
+def _write_meta(meta: Path, digest: str, size: int, turn: int, name: str,
+                code: Optional[int]) -> None:
+    """Sidecar written only AFTER the payload exists, so it can never advertise a phantom."""
+    meta.write_text(json.dumps({
+        "sha256": digest,
+        "bytes": size,
+        "turn": turn,
+        "name": name,
+        "exit_code": code,
+        "pid": os.getpid(),
+        "created": round(time.time(), 3),
+    }, ensure_ascii=False), encoding="utf-8")
+    os.chmod(meta, 0o600)
 
 
 def project(messages: List[Dict[str, Any]], *, session: str = "-", seq: int = 0,

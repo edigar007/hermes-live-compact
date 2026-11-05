@@ -1,5 +1,5 @@
 name: live_compact
-version: 0.3.0
+version: 0.3.1
 description: "Tail-first context compaction: cut the turn that just finished into a regex card so the prompt-cache prefix survives; the newest rounds stay verbatim. Request-only projection, no history rewriting, no model calls per cut."
 author: edigar007
 license: MIT
