@@ -60,6 +60,19 @@ def lc(tmp_path):
 
 
 @pytest.fixture()
+def lc_nokeep(lc):
+    """Engine with the 1.0.6 keep window switched off, for tests about the cut itself.
+
+    The keep window is on by default (3 rounds / 3.2% of the window), so a three-turn
+    fixture is protected in full and nothing is cut — that behaviour is covered by
+    tests/test_keepwindow.py.
+    """
+    lc.KEEP_ROUNDS = 0
+    lc.KEEP_ROUND_TOKENS = 0
+    return lc
+
+
+@pytest.fixture()
 def backend():
     """'hermes' or 'stub' — which agent.* backend this run uses."""
     return _ensure_hermes_importable()

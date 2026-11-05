@@ -1,8 +1,12 @@
 {
-  "_comment": "live_compact tuning. A context engine is constructed with no args and never receives config.yaml, so this file is the only knob surface. LC_* environment variables override it for experiment runs.",
+  "_comment": "live_compact tuning. A context engine is constructed with no args and never receives config.yaml, so this file is the only knob surface. LC_* environment variables override it for experiment runs. The two ratios are relative to the MODEL WINDOW and take precedence over the absolute values whenever the window is known (1M -> min_total 44800 / keep 32000; 200k -> 8960 / 6400).",
   "enabled": true,
   "debug_log": false,
   "min_total": 20000,
+  "min_total_ratio": 0.02,
+  "keep_rounds": 3,
+  "keep_round_tokens": 32000,
+  "keep_round_tokens_ratio": 0.032,
   "seg_min_tokens": 600,
   "card_ratio": 0.9,
   "shadow_max_mb": 128
