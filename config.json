@@ -9,5 +9,6 @@
   "keep_round_tokens_ratio": 0.032,
   "seg_min_tokens": 600,
   "card_ratio": 0.9,
-  "shadow_max_mb": 128
+  "shadow_max_mb": 128,
+  "shadow_dir": ""
 }

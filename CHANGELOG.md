@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.2 — the backups blocked their own upgrade
+
+`hermes plugins update live_compact` came back **BLOCKED**: the security scan over the
+installed plugin tree reported 80 findings, all of them session transcripts in
+`plugins/live_compact/shadow/` (~1.9 MB). The engine's own data was blocking the engine's
+own update — the fix is not a scan exception, it is putting user data where user data goes.
+
+- **Backups (and `debug.jsonl`) move to `$HERMES_HOME/compaction-spine/`** instead of the
+  plugin directory. Overridable with `config.json` → `shadow_dir` or `LC_SHADOW_DIR`.
+- **One-time migration on first load**: files written by <=0.3.1 are moved to the new root;
+  identical bytes are de-duplicated, different bytes are left in place so a card that names
+  them still resolves. Only then is the legacy directory removed (empty `rmdir`), so a
+  partial move never loses a backup whose card is still in a live history.
+- **New test file `tests/test_shadow_home.py`** (9 tests): default root is outside the
+  plugin dir, `HERMES_HOME` unset falls back to `plugins/../compaction-spine`, config wins
+  over the default, env wins over config, migration of session dirs and loose files,
+  dedupe/never-overwrite, no-op without a legacy dir, no-op when target *is* the legacy dir,
+  and cards naming the configured root.
+- Known cost: cards written before the move embed the old absolute path, which stops
+  resolving once the files have moved. The information they name is still in the history
+  card itself; only the "go read the raw backup" path breaks.
+
 ## 0.3.1 — a content-addressed name was trusted without checking the content
 
 Found by a new test, not by review: both writers short-circuited on "a file with that name

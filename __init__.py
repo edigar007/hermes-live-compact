@@ -127,8 +127,105 @@ SMALL_TOOL_CHARS = 512
 FAIL_MARK_LINES = 8         # failure lines quoted from a long tool result
 FAIL_LINE_CHARS = 240
 SHADOW_MAX_MB = int(_knob("shadow_max_mb", "LC_SHADOW_MAX_MB", 128))
-SHADOW_DIR = PLUGIN_DIR / "shadow"
-LOG_PATH = PLUGIN_DIR / "debug.jsonl"      # written only when debug_log is on
+
+
+def shadow_root() -> Path:
+    """Where backups live: a Hermes data dir, never the plugin directory.
+
+    ``hermes plugins update`` runs a security scan over the installed plugin tree, and
+    megabytes of session transcripts sitting inside that tree read as dozens of findings —
+    the update is BLOCKED (measured: 80 findings from 1.9 MB of ``shadow/``). Backups are
+    user data, so they belong beside the other Hermes state, not next to the code.
+    """
+    raw = os.environ.get("LC_SHADOW_DIR") or _CFG.get("shadow_dir") or ""
+    if raw:
+        return Path(os.path.expanduser(str(raw))).resolve()
+    home = os.environ.get("HERMES_HOME") or os.environ.get("HERMES_DIR")
+    if home:
+        return Path(home) / "compaction-spine" / "shadow"
+    # $HERMES_HOME/plugins/<name>/ -> $HERMES_HOME/compaction-spine/shadow
+    return PLUGIN_DIR.parent.parent / "compaction-spine" / "shadow"
+
+
+SHADOW_DIR = shadow_root()
+LOG_PATH = SHADOW_DIR.parent / "debug.jsonl"   # written only when debug_log is on
+LEGACY_SHADOW_DIR = PLUGIN_DIR / "shadow"
+
+
+def migrate_legacy_shadow(target: Optional[Path] = None,
+                          legacy: Optional[Path] = None) -> Dict[str, int]:
+    """Move backups written by <=0.3.1 out of the plugin directory.
+
+    Best effort and never fatal: a file that cannot be moved stays where it is (the card
+    that names it keeps working) and simply keeps tripping the update scan. Content is
+    never overwritten — an identical file is de-duplicated, a different one is left alone.
+    """
+    target = target or SHADOW_DIR
+    legacy = legacy or LEGACY_SHADOW_DIR
+    counts = {"moved": 0, "deduped": 0, "kept": 0, "dirs": 0}
+    # The debug log used to sit beside the engine too. Keep it, but not in the scanned tree
+    # and not appended to by the new path (hence a distinct name). Done first: it exists
+    # even when there is no legacy shadow directory at all.
+    try:
+        old_log = legacy.parent / "debug.jsonl"
+        if old_log.is_file():
+            dest = target.parent / "debug.legacy.jsonl"
+            if dest.exists():
+                counts["kept"] += 1
+            else:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                old_log.replace(dest)
+                counts["moved"] += 1
+    except Exception:
+        counts["kept"] += 1
+    try:
+        if not legacy.is_dir() or legacy.resolve() == target.resolve():
+            return counts
+    except Exception:
+        return counts
+
+    def take(src: Path, dest: Path) -> None:
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists():
+                if dest.is_file() and dest.stat().st_size == src.stat().st_size \
+                        and dest.read_bytes() == src.read_bytes():
+                    src.unlink()
+                    counts["deduped"] += 1
+                else:
+                    counts["kept"] += 1
+                return
+            src.replace(dest)
+            counts["moved"] += 1
+        except Exception:
+            counts["kept"] += 1
+
+    try:
+        for entry in sorted(legacy.iterdir()):
+            if entry.is_dir():
+                for item in sorted(entry.iterdir()):
+                    if item.is_file():
+                        take(item, target / entry.name / item.name)
+                try:
+                    entry.rmdir()                    # only if now empty
+                    counts["dirs"] += 1
+                except OSError:
+                    counts["kept"] += 1
+            elif entry.is_file() and entry.name != "MOVED.md":
+                take(entry, target / entry.name)
+        try:
+            legacy.rmdir()
+            counts["dirs"] += 1
+        except OSError:
+            pass
+    except Exception:
+        pass
+    if counts["moved"] or counts["deduped"]:
+        logging.getLogger(__name__).info(
+            "live_compact: moved %d shadow file(s) out of the plugin dir -> %s "
+            "(deduped %d, kept %d)", counts["moved"], target, counts["deduped"],
+            counts["kept"])
+    return counts
 
 CARD_HEADER = (
     "[压缩摘录] 以下是较早轮次的逐行摘录，由正则抽取，未经模型改写。"
@@ -943,6 +1040,9 @@ class LiveCompactEngine(_Base):
         super().__init__(model="", quiet_mode=True)
         self._seq = 0
         self._window = 0
+        # One-time: backups written by <=0.3.1 sit inside the plugin dir, where they get
+        # `hermes plugins update` BLOCKED by the security scan. Move them on first load.
+        self.migrated = migrate_legacy_shadow()
 
     @property
     def name(self) -> str:

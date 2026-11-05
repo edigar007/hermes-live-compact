@@ -97,11 +97,20 @@ receives `config.yaml`, so this is the only knob surface):
 | `seg_min_tokens` | `600` | turns smaller than this are never cut |
 | `card_ratio` | `0.9` | refuse the cut unless the card is under this fraction of the span |
 | `shadow_max_mb` | `128` | cap for the local backup directory; over budget ⇒ stop cutting |
+| `shadow_dir` | `""` | where backups go; empty ⇒ `$HERMES_HOME/compaction-spine/shadow` |
 
 Same-named `LC_*` environment variables override the file (`LC_ENABLED=0`,
 `LC_MIN_TOTAL`, `LC_MIN_TOTAL_RATIO`, `LC_KEEP_ROUNDS`, `LC_KEEP_ROUND_TOKENS`,
 `LC_KEEP_ROUND_TOKENS_RATIO`, `LC_SEG_MIN`, `LC_CARD_RATIO`, `LC_SHADOW_MAX_MB`,
-`LC_DEBUG_LOG`, `LC_RUN_TAG`).
+`LC_SHADOW_DIR`, `LC_DEBUG_LOG`, `LC_RUN_TAG`).
+
+**Backups do not live in the plugin directory.** They go to
+`$HERMES_HOME/compaction-spine/shadow/` (and `debug.jsonl` beside it), because
+`hermes plugins update` scans the installed plugin tree: 1.9 MB of session transcripts in
+`plugins/live_compact/shadow/` produced 80 findings and the update was BLOCKED. Anything
+0.3.1 or older wrote there is moved to the new location the first time the engine loads —
+identical files are de-duplicated, different ones are left where they are (a card that
+names them keeps working).
 
 **Window-relative sizing.** When the model window is known, the ratios decide and the
 absolute values are ignored — you do not have to retune per model:
@@ -131,7 +140,7 @@ Kept lines:
 - 第4轮 `read_file` 退出 0 → raw-9c1f4a7e02b83d15.txt
 - 第5轮 `terminal` 失败（退出码 1） → raw-4d0e77b3a915c8f2.txt
 [tool] 工具输出已省略，78636 字。 → raw-9c1f4a7e02b83d15.txt
-被省略的原文已备份到 …/live_compact/shadow/<session>/lc3df98ac3fe25.txt（绝对路径，只有本机可读）。
+被省略的原文已备份到 …/compaction-spine/shadow/<session>/lc3df98ac3fe25.txt（绝对路径，只有本机可读）。
 ```
 
 Kept: code/diff lines, file paths, tables, obligation sentences (`must`/`必须`/`禁止`…),
@@ -151,7 +160,7 @@ established fact.
 **Tool output: raw on disk, and in the prompt while it is still fresh.** A result smaller
 than 12 lines / 512 chars stays verbatim in the card; a failing result keeps its head, up to
 8 failure lines and its tail; everything else becomes one line plus a pointer. Every result
-of a cut turn is written first to `shadow/<session>/raw-<sha256[:16]>.txt` (with a
+of a cut turn is written first to `$HERMES_HOME/compaction-spine/shadow/<session>/raw-<sha256[:16]>.txt` (with a
 `.meta.json` sidecar: hash, bytes, turn, tool name, exit code, pid) — a card never names a
 file that is not on disk. The model *can* `read_file` that path (verified end-to-end), but it
 will not do so on its own initiative, which is exactly why the newest rounds are not cut:
@@ -237,11 +246,20 @@ hermes config set context.engine live_compact     # 注意：不是 hermes plugi
   1M → 44.8k/32k，200k → 8.96k/6.4k，不用按模型手改；水位永远压在保留窗口之上（×1.4），
   不会出现"保留得比要切的还多、结果一刀都切不出去"。
 - **原始工具输出先落盘**：切掉那一轮里每个工具结果都写成
-  `shadow/<会话>/raw-<sha256前16>.txt` + `.meta.json`（hash、字节数、轮次、工具名、退出码、pid），
+  `$HERMES_HOME/compaction-spine/shadow/<会话>/raw-<sha256前16>.txt` + `.meta.json`（hash、字节数、轮次、工具名、退出码、pid），
   卡片里带这个文件名；文件不存在就绝不写指针。文件名是内容哈希，每轮请求都一样，不会破缓存。
 - **助手自己说的话不算硬行**："已提交/已发布"这类自述不再阻止切分，也不会被后续卡片当成事实复述。
 - **`[exit code: N]` 只在末尾才算**：正文中间顺口提到失败不算这次调用失败；长的报错输出改为保留
   首行 + 最多 8 条失败行 + 末尾 2 行，不再整条丢成"已省略 N 字"。
+
+**v0.3.2（备份搬出插件目录）**：
+
+- 备份改到 `$HERMES_HOME/compaction-spine/shadow/`（`debug.jsonl` 也在旁边），不再写进
+  `plugins/live_compact/`。原因很实际：`hermes plugins update` 会扫描已安装的插件目录，
+  1.9 MB 会话正文被扫描器数成 80 条 findings，升级直接 **BLOCKED**——插件的备份把自己的升级堵了。
+- 0.3.1 及更早写的旧文件，引擎第一次加载时自动搬过去：内容相同的合并去重，内容不同的原地不动
+  （指向它的旧卡片还能读）。旧卡片里写的是旧绝对路径，迁移后那些路径失效，属于已知代价。
+- 可用 `config.json` 的 `shadow_dir` 或 `LC_SHADOW_DIR` 改位置（相对路径按当前目录解析）。
 
 代价（依然要清楚）：切点之后的老细节只剩"卡片 + 备份路径"，问它老日志中段的具体数字，它会说
 "记不清"而不是编；补救办法是让它 `read_file` 卡片里给的绝对路径（实测可行，但它不会自己主动去读）。
