@@ -184,6 +184,14 @@ OBLIGATION_RE = re.compile(
     r"|必须|不要|禁止|不能|不得|只能|保留)"
 )
 ERROR_LINE_RE = re.compile(r"^(?:Error:|Exception:|Traceback\b|FAILED\b|panic!)")
+# A log line that reports a failure, with or without a leading timestamp:
+#   "2026-11-04 09:12:57 ERROR settle worker=w1 order=ORD-1511 ..."
+# Deliberately anchored at the start, so prose that merely mentions an error mid-sentence
+# is not promoted to a claim.
+LOG_FAIL_RE = re.compile(
+    r"^(?:\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\s+)?"
+    r"(?:\[[^\]]{1,24}\]\s*)?(?:ERROR|FATAL|CRITICAL|SEVERE|WARN(?:ING)?)\b"
+)
 FAIL_MARK_RE = re.compile(
     r"(?i)\b(?:error|fatal|failed|failure|exception|traceback|cannot|unable|denied|refused)\b"
 )
@@ -259,6 +267,12 @@ def _is_tool(message: Any) -> bool:
 def _role(message: Any) -> str:
     role = message.get("role") if isinstance(message, dict) else None
     return role if role in ("user", "assistant", "tool") else "other"
+
+
+def _line_shape(line: str) -> str:
+    """Digits and hex ids collapsed: two log rows that differ only in a number share a
+    shape, and the card only needs one of them."""
+    return re.sub(r"[0-9a-f]{6,}|\d+", "#", line)[:160]
 
 
 def _is_padding(text: str) -> bool:
@@ -351,7 +365,8 @@ def attributed_lines(sources: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
             if line in seen:
                 continue
             if named or OBLIGATION_RE.search(line) or ERROR_LINE_RE.match(line) \
-                    or IDENT_VERB_RE.search(line) or PATH_RE.match(line):
+                    or LOG_FAIL_RE.match(line) or IDENT_VERB_RE.search(line) \
+                    or PATH_RE.match(line):
                 seen.add(line)
                 items.append((role_name, line))
     return items
@@ -508,39 +523,70 @@ def build_card(span_messages: List[Dict[str, Any]], live_text: str, shadow_path:
     """Deterministic card for one turn body; None when the cut would lose a hard line."""
     raw_names = raw_names or {}
     body: List[Tuple[str, str]] = []
+    tools: List[str] = []
     for message in span_messages:
         text = message_text(message)
-        if not _is_tool(message) and text.strip():
+        if _is_tool(message):
+            tools.append(text)
+        elif text.strip():
             body.append((_role(message), text))
-    # Assistant prose is not evidence: its claims can neither block a cut nor be replayed
-    # as fact in the card (upstream 1.0.6 `claimSpans` excludes the assistant role).
-    sources = [(role_name, text) for role_name, text in body if role_name != "assistant"]
-    span_text = "\n".join(text for _role_name, text in sources)
-    hard = attributed_lines(sources)
+    # Two tiers, because they carry different obligations:
+    #   * user lines  — the instruction. If one cannot be kept, REFUSE the cut.
+    #   * tool lines  — evidence. Best effort; every tool result now has a raw file on
+    #                   disk, so losing a line from the card costs a read, not the fact.
+    # Assistant prose is neither: its claims can neither block a cut nor be replayed as
+    # fact in a later card (upstream 1.0.6 `claimSpans` excludes the assistant role).
+    user_sources = [(role_name, text) for role_name, text in body if role_name == "user"]
+    tool_sources = [("tool", text) for text in tools if text.strip()]
+    hard = attributed_lines(user_sources)
+    tool_claims = attributed_lines(tool_sources)
+    span_text = "\n".join(text for _role_name, text in user_sources + tool_sources)
     covered, uncovered, _code_lines = plan_text(span_text)
 
     kept: List[Tuple[str, str]] = []
+    kept_lines = set()
+    shapes: Dict[str, int] = {}
     used = 0
     omitted_hard = 0
+    deferred = 0
+
+    def take(role_name: str, line: str, *, per_shape: int = 2) -> bool:
+        """Add one kept line if it fits. Nearly-identical lines (an 800-line log whose rows
+        differ only in a number) are capped per "shape": quoting ten copies of the same
+        INFO line spends the card budget without adding a fact."""
+        nonlocal used
+        if line in kept_lines or line in live_text:
+            return True
+        if used + len(line) > KEEP_BUDGET:
+            return False
+        shape = _line_shape(line)
+        if shapes.get(shape, 0) >= per_shape:
+            return False
+        shapes[shape] = shapes.get(shape, 0) + 1
+        kept.append((role_name, line))
+        kept_lines.add(line)
+        used += len(line)
+        return True
+
+    # 1. what the user asked for: if one of these cannot be kept, the cut is refused.
     for role_name, line in hard:
         if line in live_text:
             continue
-        if used + len(line) > KEEP_BUDGET:
+        if not take(role_name, line, per_shape=10 ** 6):
             omitted_hard += 1
-            continue
-        kept.append((role_name, line))
-        used += len(line)
-    kept_lines = {line for _role_name, line in kept}
-    deferred = 0
+    # 2. what the tools reported going wrong: first-class evidence, ahead of everything else
+    #    the tool said. Bulk order matters — an 800-line log's signal is in its failures.
+    failures = [item for item in tool_claims
+                if ERROR_LINE_RE.match(item[1]) or LOG_FAIL_RE.match(item[1])]
+    others = [item for item in tool_claims if item not in failures]
+    for group, per_shape in ((failures, 8), (others, 2)):
+        for role_name, line in group:
+            if not take(role_name, line, per_shape=per_shape):
+                deferred += 1
+    # 3. code/diff/path lines seen anywhere in the span, last and shape-capped.
     for line in dict.fromkeys(covered):
-        if line in kept_lines or line in live_text:
-            continue
-        if used + len(line) > KEEP_BUDGET:
+        if not take(_role_of_line(line, body), line):
             deferred += 1
-            continue
-        kept.append((_role_of_line(line, body), line))
-        kept_lines.add(line)
-        used += len(line)
 
     missing = [line for _role_name, line in hard if line not in live_text and line not in kept_lines]
     ok = not missing
@@ -552,7 +598,8 @@ def build_card(span_messages: List[Dict[str, Any]], live_text: str, shadow_path:
         part for part in [
             CARD_HEADER,
             note,
-            f"Matched lines: {len(hard)}. Missing: {len(missing)}. Deferred: {deferred}. Omitted over budget: {omitted_hard}.",
+            f"Matched lines: {len(hard)} (user) + {len(tool_claims)} (tool). Missing: {len(missing)}. "
+            f"Deferred: {deferred}. Omitted over budget: {omitted_hard}.",
             "Kept lines:" if kept else "Kept lines: (none)",
             *[f"- [{role_name}] {line}" for role_name, line in kept],
             "工具证据:" if evidence else "",
@@ -564,6 +611,8 @@ def build_card(span_messages: List[Dict[str, Any]], live_text: str, shadow_path:
         "ok": ok,
         "text": text,
         "hard": len(hard),
+        "tool_claims": len(tool_claims),
+        "deferred": deferred,
         "missing": len(missing),
         "kept": len(kept),
         "tool_skipped": tool_skipped,

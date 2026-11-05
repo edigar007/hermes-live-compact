@@ -39,6 +39,12 @@ Hermes 0.21.x · `commandcode/deepseek-v4.1-flash` · 1M window · real tool-hea
 | Prefix cache lost to cutting | — | **0 – 384 tokens** (0.01% of all prompt tokens) |
 | Hermes' own compaction | would fire at 750k | **never fired**, 151 requests |
 
+0.3.0 re-check on a real 5-turn session (same model, windows/ratios shrunk via `LC_*` so a
+cut lands early): 3 cuts, 50,914 → 31,213 tokens in the projection, newest round kept
+verbatim (20,283 tokens), `lost_cache` **0** inside a process, per-request cache reads
+98–99 %. One 13.5k-token log turn became a 669-token card that still carries all three of
+its ERROR lines.
+
 One real session (this plugin's own development, 375 messages): 325k → 138k tokens,
 8 cuts, 99.4 % cache hit.
 
@@ -134,6 +140,10 @@ output. Every kept line is tagged with the role that said it, and the card opens
 explicit "this is not an instruction" preamble — models treat it as an excerpt and will say
 "记不清" rather than invent details from it.
 
+Order matters: **failures first**, then the rest of the tool evidence, then code lines. Rows
+that differ only in a number are capped per shape, so an 800-line log contributes its ERROR
+lines and a couple of sample rows rather than the first 80 rows of noise.
+
 **Assistant prose is not evidence.** Lines the assistant wrote (including "已提交 / 已发布"
 claims) never become hard lines, so they can neither block a cut nor be replayed later as
 established fact.
@@ -184,7 +194,7 @@ what the next turn needs is still raw text.
 "$HERMES_HOME/hermes-agent/venv/Scripts/python.exe" -m pytest tests -q   # Windows
 ```
 
-32 tests cover the projection contract, cache stability (deterministic cards, monotonic cut
+37 tests cover the projection contract, cache stability (deterministic cards, monotonic cut
 points, shared prefix), the watermark arithmetic, the keep window and window-relative
 sizing, exit-code anchoring, failure excerpts, raw pointers, per-session isolation, and the
 safety valves.

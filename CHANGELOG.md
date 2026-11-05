@@ -20,13 +20,21 @@ before the first card appears — that is the point, not a regression.
   Content-addressed, so the name is identical on every request and cannot break the cache.
 - **Assistant prose is not evidence.** The assistant's own "already committed / published"
   lines no longer count as hard lines: they cannot block a cut, and they are not replayed
-  as fact in a later card.
+  as fact in a later card. Two tiers remain: *user* lines block the cut if they cannot be
+  kept, *tool* lines are best effort (their raw file is named in the card).
+- **Failure lines first, bulk lines capped by shape.** Tool evidence is ordered
+  failures → everything else → code lines, and near-identical rows (an 800-line log whose
+  rows differ only in a number) are capped per digit-collapsed "shape". A 13 kB log whose
+  only signal is 3 ERROR lines now yields a 669-token card that contains all 3, instead of
+  a card full of the first 80 INFO rows.
+- **Timestamped log failures are claims.** `2026-11-04 09:12:57 ERROR …` is kept even
+  though it does not start with `Error:`; prose that merely mentions an error is not.
 - **`[exit code: N]` only counts at the END** of a tool result (a note *mentioning* a
   failure no longer marks the call as failed). Long failing results now keep their head,
   up to 8 failure-marker lines and their tail instead of collapsing to "omitted".
 - **Per-session shadow directories** (`shadow/<session>/`), so rotating one session's
   backups can never touch another session that is still running.
-- 32 tests (up from 16): keep-window arithmetic, window-relative sizing, exit-code
+- 37 tests (up from 16): keep-window arithmetic, window-relative sizing, exit-code
   anchoring, failure excerpts, evidence lines, raw pointers, per-session isolation.
 
 ## 0.2.0 — first public release

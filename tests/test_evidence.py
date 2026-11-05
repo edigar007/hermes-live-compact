@@ -68,3 +68,81 @@ def test_card_carries_evidence_and_pointer_for_a_cut_turn(lc_nokeep):
     assert cards
     assert any("工具证据:" in card and "`read_file`" in card for card in cards)
     assert any("raw-" in card for card in cards)
+
+
+def _turn_with_tool(tool_text):
+    return [
+        {"role": "user", "content": "看日志，把 ERROR 找出来。"},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read_file"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": tool_text},
+        {"role": "assistant", "content": "好了。"},
+    ]
+
+
+def test_tool_evidence_lines_are_kept_when_they_fit(lc):
+    body = _turn_with_tool(
+        "ERROR settle_ledger seq 9211 unique constraint\n"
+        "ERROR settle_ledger seq 9212 unique constraint\n"
+        + "\n".join(f"INFO line {i}" for i in range(30))
+    )
+    card = lc.build_card(body, "", "/tmp/x.txt")
+    assert card["ok"] is True
+    assert card["tool_claims"] > 0
+    assert "settle_ledger seq 9211" in card["text"]
+
+
+def test_log_failure_lines_are_claims(lc):
+    """A timestamped ERROR line is a claim even though it does not start with ``Error:``."""
+    assert lc.LOG_FAIL_RE.match("2026-11-04 09:12:57 ERROR settle worker=w1 order=ORD-1511")
+    assert lc.LOG_FAIL_RE.match("[warn] WARNING disk almost full")
+    assert not lc.LOG_FAIL_RE.match("我上一轮说过这里有个 ERROR，但已经修好了")
+    body = _turn_with_tool(
+        "2026-11-04 09:00:00 INFO  settle worker=w0 order=ORD-1300 status=ok\n"
+        "2026-11-04 09:12:57 ERROR settle worker=w1 order=ORD-1511 status=fail\n"
+        + "\n".join(f"2026-11-04 09:13:{i:02d} INFO  settle worker=w0 status=ok" for i in range(20))
+    )
+    card = lc.build_card(body, "", "/tmp/x.txt")
+    assert card["ok"] is True
+    assert "ERROR settle worker=w1 order=ORD-1511" in card["text"]
+
+
+def test_near_duplicate_lines_are_capped(lc):
+    """An 800-line log whose rows differ only in a number is one fact, not 800."""
+    body = _turn_with_tool(
+        "\n".join(f"2026-11-04 09:00:{i % 60:02d} INFO settle_ledger seq={9000 + i} status=ok"
+                  for i in range(200))
+    )
+    card = lc.build_card(body, "", "/tmp/x.txt")
+    assert card["ok"] is True
+    assert card["tool_claims"] == 200, "every numbered row should match as a claim"
+    assert card["kept"] <= 2, f"shape cap did not apply: kept {card['kept']} lines"
+    assert card["deferred"] >= 190
+
+
+def test_failure_lines_outrank_bulk_lines(lc):
+    body = _turn_with_tool(
+        "\n".join([f"2026-11-04 09:00:{i % 60:02d} INFO settle_ledger seq={9000 + i} status=ok"
+                   for i in range(200)]
+                  + ["2026-11-04 09:03:31 ERROR settle_ledger code=E211 detail=unique constraint seq 9211",
+                     "2026-11-04 09:08:53 ERROR settle_ledger code=E533 detail=unique constraint seq 9533",
+                     "2026-11-04 09:12:57 ERROR settle_ledger code=E777 detail=unique constraint seq 9777"])
+    )
+    card = lc.build_card(body, "", "/tmp/x.txt")
+    text = card["text"]
+    assert card["ok"] is True
+    assert text.index("code=E211") < text.index("INFO settle_ledger"), "failures must come first"
+    for code in ("E211", "E533", "E777"):
+        assert code in text, f"{code} was crowded out of the card"
+
+
+def test_huge_tool_output_does_not_block_the_cut(lc):
+    """Tool lines are evidence, not instructions: those that do not fit are deferred, and
+    the cut still happens because the raw file is on disk."""
+    body = _turn_with_tool(
+        "\n".join(f"ERROR settle_ledger seq {9000 + i} detail=unique constraint" for i in range(1200))
+    )
+    card = lc.build_card(body, "", "/tmp/x.txt")
+    assert card["ok"] is True, "a bulky tool result must not veto the cut"
+    assert card["missing"] == 0
+    assert card["kept"] * 1 <= 8000  # budget respected
