@@ -10,24 +10,36 @@ import _helpers as H
 
 
 def test_sizing_is_window_relative(lc):
-    assert lc.sizing(1_000_000) == (44800, 3, 32000)
-    assert lc.sizing(200_000) == (8960, 3, 6400)
-    # Nothing sane happens on a tiny window: scale down, never protect more than we cut.
-    assert lc.sizing(128_000)[0] > lc.sizing(128_000)[2]
+    # Upstream 1.0.6 numbers at 1M (watermark 20k / keep 3 rounds / 32k), scaled by window.
+    assert lc.sizing(1_000_000) == (20000, 3, 32000)
+    assert lc.sizing(200_000) == (4000, 3, 6400)
+    assert lc.sizing(128_000) == (2560, 3, 4096)
 
 
-def test_keep_window_always_fits_inside_the_watermark(lc):
-    """Upstream's caveat: keep_tokens > min_total means the engine protects everything it
-    was asked to cut and silently never cuts again."""
-    for window in (8_000, 32_000, 64_000, 128_000, 200_000, 400_000, 1_000_000, 2_000_000):
+def test_watermark_is_never_pinned_to_the_keep_window(lc):
+    """0.3.2 did ``watermark = max(keep * 1.4, 2% window)``, which turned a 1M install's
+    20 000 watermark into 44 800 and made ordinary sessions look like the engine never ran.
+    The two knobs are independent: keep bounds protection, not the trigger."""
+    for window in (128_000, 200_000, 1_000_000, 2_000_000):
         min_total, _rounds, keep_tokens = lc.sizing(window)
-        assert min_total > keep_tokens, f"window {window}: {min_total} <= {keep_tokens}"
+        assert min_total == max(2048, int(window * 0.02))
+        assert keep_tokens == int(window * 0.032)
+
+
+def test_a_multi_turn_session_still_cuts_at_every_window(lc):
+    """The behavioural guard the old inequality test was standing in for."""
+    bodies = [H.BIG + f" #w{i}" for i in range(8)]
+    msgs = H.conversation(bodies)
+    for window in (128_000, 200_000, 1_000_000):
+        projected, stats = lc.project(msgs, session=f"w{window}", seq=1, window=window)
+        assert stats["cuts"] >= 1, f"window {window}: {stats}"
 
 
 def test_unknown_window_falls_back_to_configured_min_total(lc):
-    min_total, _rounds, keep_tokens = lc.sizing(0)
+    min_total, rounds, keep_tokens = lc.sizing(0)
     assert min_total == lc.MIN_TOTAL
-    assert keep_tokens < min_total
+    assert rounds == lc.KEEP_ROUNDS == 3
+    assert keep_tokens == lc.KEEP_ROUND_TOKENS == 32000
 
 
 def test_newest_rounds_are_never_cut(lc):

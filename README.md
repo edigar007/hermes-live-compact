@@ -117,14 +117,17 @@ absolute values are ignored — you do not have to retune per model:
 
 | model window | cuts at | newest rounds kept |
 |---|---:|---:|
-| 1M | 44.8k (2 %) | ≥ 32k (3.2 %) / 3 rounds |
-| 400k | 17.9k | ≥ 12.8k / 3 rounds |
-| 200k | 8.96k | ≥ 6.4k / 3 rounds |
+| 1M | 20k (2 %) | ≥ 32k (3.2 %) / 3 rounds |
+| 400k | 8k (2 %) | ≥ 12.8k / 3 rounds |
+| 200k | 4k (2 %) | ≥ 6.4k / 3 rounds |
 | <128k | works, but there is little to gain | let Hermes compress normally |
 
-The watermark is always held at ≥ 1.4 × the keep window, so the engine can never end up
-protecting every round it was asked to cut (the failure mode of copying upstream's fixed
-`32000` next to a `20000` threshold on a 1M window).
+The watermark and the keep window are independent knobs: the watermark says *when* the engine
+starts cutting, the keep window bounds *what stays verbatim*. Upstream 1.0.6 ships exactly
+this pair on a 1M window (20 000 watermark, 32 000 keep) and cuts fine — rounds older than
+the keep window stay cuttable. 0.3.2 tied them together (`watermark = keep × 1.4`), which
+pushed the first cut on a 1M window to 44 800 tokens and made ordinary sessions look inert;
+0.3.3 removed the coupling and restored upstream's numbers.
 
 ---
 

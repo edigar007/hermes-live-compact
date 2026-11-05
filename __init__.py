@@ -107,9 +107,10 @@ MIN_TOTAL_RATIO = float(_knob("min_total_ratio", "LC_MIN_TOTAL_RATIO", 0.02))
 KEEP_ROUNDS = int(_knob("keep_rounds", "LC_KEEP_ROUNDS", 3))
 KEEP_ROUND_TOKENS = int(_knob("keep_round_tokens", "LC_KEEP_ROUND_TOKENS", 32000))
 KEEP_ROUND_TOKENS_RATIO = float(_knob("keep_round_tokens_ratio", "LC_KEEP_ROUND_TOKENS_RATIO", 0.032))
-# The keep window must stay strictly smaller than the watermark, or the engine protects
-# every round it was asked to cut and silently never cuts anything (upstream's caveat).
-KEEP_TO_WATERMARK = 1.4
+# No watermark/keep coupling: upstream 1.0.6 runs a 20000 watermark against a 32000 keep
+# window and cuts fine — the keep window bounds *protection*, and rounds older than it are
+# always cuttable once the watermark is passed. Tying the two raised the first cut on a 1M
+# window to 44800 and made ordinary sessions look inert.
 
 SEG_MIN_TOKENS = int(_knob("seg_min_tokens", "LC_SEG_MIN", 600))
 CARD_RATIO = float(_knob("card_ratio", "LC_CARD_RATIO", 0.9))
@@ -238,18 +239,21 @@ KEEP_NOTE = "最近 %d 轮完整保留在原文里，不在本摘录中；只有
 def sizing(window: int = 0) -> Tuple[int, int, int]:
     """(min_total, keep_rounds, keep_tokens) for a model window.
 
-    Window-relative by design: a fixed 20000 watermark is 2% of a 1M window and 20% of a
-    128k one, and upstream's fixed 32000-token keep window is LARGER than that watermark
-    on a 1M install — which is exactly how an engine ends up never cutting anything.
+    Ratio-only watermark, same numbers as upstream 1.0.6 at a 1M window (20 000 / 3 rounds
+    / 32 000) but scaled by the window: a fixed 20 000 is 2% of 1M and 20% of a 128k model.
+
+    The keep window sizes the *protection*, not the trigger: upstream keeps the newest 3
+    rounds and lets a larger token budget pull in one more round when the turns are small.
+    Coupling the watermark to it (0.3.2 did: watermark = keep x 1.4) silently raised the
+    first cut on a 1M window from 20 000 to 44 800 tokens, which is what made short-but-long
+    sessions look like the engine was dead.
     """
     if window and window > 0:
         keep_tokens = max(1024, int(window * KEEP_ROUND_TOKENS_RATIO))
-        min_total = max(int(keep_tokens * KEEP_TO_WATERMARK), int(window * MIN_TOTAL_RATIO))
+        min_total = max(2048, int(window * MIN_TOTAL_RATIO))
         return min_total, KEEP_ROUNDS, keep_tokens
-    # Unknown window (tests, or a model without metadata): trust the absolute config, but
-    # still hold the watermark above the keep window.
-    keep_tokens = min(KEEP_ROUND_TOKENS, int(MIN_TOTAL / KEEP_TO_WATERMARK))
-    return MIN_TOTAL, KEEP_ROUNDS, keep_tokens
+    # Unknown window (tests, or a model without metadata): upstream's absolute pair.
+    return MIN_TOTAL, KEEP_ROUNDS, KEEP_ROUND_TOKENS
 
 
 def stable_backup_id(span_messages: List[Dict[str, Any]]) -> str:

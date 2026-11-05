@@ -1,5 +1,5 @@
 {
-  "_comment": "live_compact tuning. A context engine is constructed with no args and never receives config.yaml, so this file is the only knob surface. LC_* environment variables override it for experiment runs. The two ratios are relative to the MODEL WINDOW and take precedence over the absolute values whenever the window is known (1M -> min_total 44800 / keep 32000; 200k -> 8960 / 6400).",
+  "_comment": "live_compact tuning. A context engine is constructed with no args and never receives config.yaml, so this file is the only knob surface. LC_* environment variables override it for experiment runs. The two ratios are relative to the MODEL WINDOW and take precedence over the absolute values whenever the window is known (1M -> watermark 20000 / keep 32000; 200k -> 4000 / 6400). The watermark is independent of the keep window.",
   "enabled": true,
   "debug_log": false,
   "min_total": 20000,

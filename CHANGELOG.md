@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.3.3 — the watermark is a trigger again, not a second keep window
+
+Reported as "the engine never cuts": on a 1M model window the debug log showed
+`cuts=0` request after request, `protected_from=0`. The cause was our own sizing, not the
+keep window: 0.3.2 computed `min_total = max(keep_tokens * 1.4, 2% window)`, so the 1M
+watermark was **44 800** instead of upstream 1.0.6's **20 000**, and a session that had not
+yet crossed it looked dead.
+
+- **Watermark is `2% of the model window` on its own** (1M → 20 000, 200k → 4 000, 128k →
+  2 560, floor 2 048), matching upstream's `SPINE_MIN_TOKENS || 20000` at 1M. The
+  `keep_tokens * 1.4` coupling is gone.
+- **Keep window untouched**: 3 rounds / 32 000 tokens (32k ratio 0.032), i.e. upstream's
+  `SPINE_KEEP_ROUNDS || 3` / `SPINE_KEEP_ROUND_TOKENS || 32000`. The keep window bounds
+  *protection*; rounds older than it are cuttable as soon as the watermark is passed, so a
+  watermark below the keep budget is safe (upstream ships exactly that pair).
+- **Unknown window** now returns upstream's absolute pair (20 000 / 3 / 32 000) instead of
+  squeezing the keep budget under the watermark.
+- **Tests**: `test_sizing_is_window_relative` pins the upstream numbers; the old
+  "keep always fits inside the watermark" inequality is replaced by
+  `test_watermark_is_never_pinned_to_the_keep_window` plus a behavioural
+  `test_a_multi_turn_session_still_cuts_at_every_window` (8 turns, every window, `cuts >= 1`).
+- **Live evidence** (this repo's author session, 196 messages / 78 525 tokens, 1M window):
+  watermark 44 800 → `cuts=0` at 3 rounds of history; watermark 20 000 → `cuts=1`,
+  78 525 → 49 235 tokens (62.7% kept) with the same 3-round keep window.
+
+
 ## 0.3.2 — the backups blocked their own upgrade
 
 `hermes plugins update live_compact` came back **BLOCKED**: the security scan over the
