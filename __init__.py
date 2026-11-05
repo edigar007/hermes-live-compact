@@ -107,6 +107,11 @@ MIN_TOTAL_RATIO = float(_knob("min_total_ratio", "LC_MIN_TOTAL_RATIO", 0.02))
 KEEP_ROUNDS = int(_knob("keep_rounds", "LC_KEEP_ROUNDS", 3))
 KEEP_ROUND_TOKENS = int(_knob("keep_round_tokens", "LC_KEEP_ROUND_TOKENS", 32000))
 KEEP_ROUND_TOKENS_RATIO = float(_knob("keep_round_tokens_ratio", "LC_KEEP_ROUND_TOKENS_RATIO", 0.032))
+# Upstream 1.0.6's BIG_GATE: past this much history, stop the fine-grained cuts and hand the
+# session back to the host's own compaction. Above 650k the model is going to be compressed
+# anyway, and continuing to project a 650k+ transcript only adds risk (and, on a 1M window,
+# leaves the host to fire its own 750k compression mid-turn).
+BIG_GATE = int(_knob("big_gate", "LC_BIG_GATE", 650000))
 # No watermark/keep coupling: upstream 1.0.6 runs a 20000 watermark against a 32000 keep
 # window and cuts fine — the keep window bounds *protection*, and rounds older than it are
 # always cuttable once the watermark is passed. Tying the two raised the first cut on a 1M
@@ -879,10 +884,17 @@ def project(messages: List[Dict[str, Any]], *, session: str = "-", seq: int = 0,
         "cuts": 0, "tokens_after": before_tokens, "cut": [], "skips": {},
         "cut_sig": [], "first_cut": None,
         "window": window, "min_total": min_total, "keep_rounds": keep_rounds,
-        "keep_tokens": keep_tokens, "protected_from": None,
+        "keep_tokens": keep_tokens, "big_gate": BIG_GATE, "protected_from": None,
     }
     if not ENABLED:
         stats["skips"]["disabled"] = 1
+        return None, stats
+    # Upstream 1.0.6's BIG_GATE, applied as a whole-request gate on purpose: past 650k the
+    # session is about to be compressed by the host anyway, so the engine stops cutting and
+    # lets stock compaction do its thing. Unlike the watermark, a global gate here cannot
+    # misplace a first cut — it means "this session is no longer mine".
+    if BIG_GATE > 0 and before_tokens >= BIG_GATE:
+        stats["skips"]["above_big_gate"] = before_tokens
         return None, stats
     # NOTE: no global early return here. The watermark is evaluated per completed turn
     # (prefix sums) below; a whole-request gate can open late enough that the first cut
@@ -1105,11 +1117,12 @@ class LiveCompactEngine(_Base):
         min_total, keep_rounds, keep_tokens = sizing(window)
         logging.getLogger("plugins.context_engine.live_compact").info(
             "live_compact armed: enabled=%s window=%s min_total=%s (%.1f%%) "
-            "keep_rounds=%s keep_tokens=%s (%.1f%%)",
+            "keep_rounds=%s keep_tokens=%s (%.1f%%) big_gate=%s",
             ENABLED, window or "?", min_total,
             (100.0 * min_total / window) if window else 0.0,
             keep_rounds, keep_tokens,
             (100.0 * keep_tokens / window) if window else 0.0,
+            BIG_GATE or "off",
         )
 
     def bind_session_state(self, session_db=None, session_id=None, **kwargs) -> None:

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.4 — upstream's 650k gate, and a Chinese README
+
+Ported the last constant we were missing from upstream 1.0.6: `BIG_GATE = 650000`, where the
+engine stops cutting and hands the session back.
+
+- **`big_gate` (default 650 000, `LC_BIG_GATE`, `0` = off)**: when the *estimated request*
+  exceeds it, `project()` returns nothing and records `skips.above_big_gate` — no card, no
+  backup, the host's own compaction takes over. Upstream does the same
+  (`if (totalTokens < MIN_PRESSURE || totalTokens >= BIG_GATE) return;`); above that size the
+  host is going to compress anyway, so continuing to project only adds risk.
+- **Verified at real size** (no knobs touched): 640 224 tokens → 109 cuts, 87 589 tokens;
+  800 304 tokens → `cuts=0`, `skips={"above_big_gate": 800304}`, projection `None`.
+- **New `tests/test_biggate.py`** (4 tests): the default matches upstream, a history at/above
+  the gate is never projected, just below it still cuts, and `big_gate = 0` disables the gate.
+- **Docs split by language**: `README.md` is now Chinese (primary), the English text moved to
+  `README.en.md` and both were rewritten for 0.3.3's watermark change, the keep-window/watermark
+  decoupling, the `big_gate` row, and the honest note that a request-level projection cannot
+  stop Hermes' own 750k compaction.
+
+
 ## 0.3.3 — the watermark is a trigger again, not a second keep window
 
 Reported as "the engine never cuts": on a 1M model window the debug log showed
